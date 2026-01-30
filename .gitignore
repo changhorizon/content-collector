@@ -1,0 +1,37 @@
+# Logs
+*.log
+
+# OS / 系统文件
+.DS_Store
+Thumbs.db
+
+# 环境配置文件
+.env
+.env.backup
+.env.production
+
+# IDE / 编辑器
+/.idea
+/.vscode
+/.zed
+
+# Composer / Node 依赖
+/vendor
+/node_modules
+
+# Storage / 下载目录
+/storage/*.key
+/storage/pail
+/storage/app/public/downloads/*
+
+# PHPUnit 配置文件（本地覆盖）
+phpunit.xml
+
+# PHPUnit 测试结果缓存（加速测试运行）
+.phpunit.result.cache
+.phpunit.cache/
+.phpunit.coverage/
+
+# PHP CS Fixer 配置和缓存
+.php-cs-fixer.php
+.php-cs-fixer.cache
