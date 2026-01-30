@@ -10,7 +10,6 @@ use ChangHorizon\ContentCollector\Models\CrawlTask;
 use ChangHorizon\ContentCollector\Models\Media;
 use ChangHorizon\ContentCollector\Models\ParsedPage;
 use ChangHorizon\ContentCollector\Models\RawPage;
-use DateTime;
 
 class TaskFinalizer
 {
@@ -43,8 +42,8 @@ class TaskFinalizer
                 host: $task->host,
                 parsedPages: ParsedPage::where('host', $task->host)->get(),
                 media: Media::where('host', $task->host)->get(),
-                startedAt: new DateTime($task->started_at),
-                finishedAt: new DateTime($task->finished_at),
+                startedAt: $task->started_at,
+                finishedAt: $task->finished_at,
             ),
         ));
     }
