@@ -74,14 +74,11 @@ class FetchPageJob implements ShouldQueue
     protected function persistRawPage(FetchResult $result): RawPage
     {
         return RawPage::updateOrCreate(
+            ['host' => $this->host, 'url' => $this->url],
             [
                 'task_id' => $this->taskId,
-                'url' => $this->url,
-            ],
-            [
-                'host' => $this->host,
                 'status' => 'fetched',
-                'http_status' => $result->statusCode,
+                'status_code' => $result->statusCode,
                 'headers' => $result->headers,
                 'body' => $result->body,
                 'fetched_at' => now(),

@@ -27,7 +27,7 @@ class RawPage extends Model
         'url',
         'depth',
         'status',
-        'http_status',
+        'status_code',
         'headers',
         'raw_content',
         'discovered_from',

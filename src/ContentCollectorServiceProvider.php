@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace ChangHorizon\ContentCollector;
 
 use ChangHorizon\ContentCollector\Commands\RunCollector;
+use ChangHorizon\ContentCollector\Contracts\PageFetcherInterface;
+use ChangHorizon\ContentCollector\Services\HttpPageFetcher;
 use Illuminate\Support\ServiceProvider;
 
 class ContentCollectorServiceProvider extends ServiceProvider
@@ -34,6 +36,12 @@ class ContentCollectorServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(
             __DIR__ . '/../config/content-collector.php',
             'content-collector',
+        );
+
+        // ✅ 绑定接口到默认实现
+        $this->app->bind(
+            PageFetcherInterface::class,
+            HttpPageFetcher::class,
         );
     }
 }
