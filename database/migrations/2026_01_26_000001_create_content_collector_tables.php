@@ -76,7 +76,10 @@ return new class () extends Migration {
                 ['link', 'embed', 'import', 'preload', 'redirect', 'canonical'],
             )->nullable()->comment('引用关系语义');
             $table->timestamps();
-            $table->unique(['raw_page_id', 'target_id', 'target_type', 'source_tag', 'source_attr']);
+            $table->unique(
+                ['raw_page_id', 'target_id', 'target_type', 'source_tag', 'source_attr'],
+                'cc_ref_raw_target_tag_unique',
+            );
             $table->comment('页面与页面 / 媒体之间的引用关系');
         });
 
@@ -123,7 +126,10 @@ return new class () extends Migration {
             $table->timestamp('scheduled_at')->nullable()->comment('URL 被调度进入处理队列的时间');
             $table->timestamp('fetched_at')->nullable()->comment('URL 对应页面成功抓取的时间');
             $table->timestamp('parsed_at')->nullable()->comment('URL 对应页面完成解析的时间');
-            $table->enum('final_result', ['success', 'failed', 'skipped', 'denied'])->nullable()->comment('URL 处理的最终结果状态');
+            $table->enum(
+                'final_result',
+                ['success', 'failed', 'skipped', 'denied'],
+            )->nullable()->comment('URL 处理的最终结果状态');
             $table->string('final_reason')->nullable()->comment('终结结果原因说明，如失败或被拒绝的具体原因');
             $table->timestamps();
             $table->unique(['task_id', 'host', 'url']);
