@@ -6,34 +6,34 @@ namespace ChangHorizon\ContentCollector\Services;
 
 use ChangHorizon\ContentCollector\DTO\TaskResult;
 use ChangHorizon\ContentCollector\Events\TaskCompleted;
-use ChangHorizon\ContentCollector\Models\CrawlTask;
-use ChangHorizon\ContentCollector\Models\Media;
+use ChangHorizon\ContentCollector\Models\Task;
+use ChangHorizon\ContentCollector\Models\UrlLedger;
 use ChangHorizon\ContentCollector\Models\ParsedPage;
-use ChangHorizon\ContentCollector\Models\RawPage;
+use ChangHorizon\ContentCollector\Models\Media;
 
 class TaskFinalizer
 {
     public static function tryFinalize(string $taskId): void
     {
-        $task = CrawlTask::where('task_id', $taskId)
+        $task = Task::where('task_id', $taskId)
             ->where('status', 'running')
             ->first();
 
-        if (!$task) {
+        if (! $task) {
             return;
         }
 
-        // 是否还有未完成 RawPage
-        $pending = RawPage::where('task_id', $taskId)
-            ->whereNull('fetched_at')
+        // 仍有未终结 URL（核心判定）
+        $hasPending = UrlLedger::where('task_id', $taskId)
+            ->whereNull('final_result')
             ->exists();
 
-        if ($pending) {
+        if ($hasPending) {
             return;
         }
 
         $task->update([
-            'status' => 'completed',
+            'status'      => 'finished',
             'finished_at' => now(),
         ]);
 

@@ -9,8 +9,9 @@ class FetchResult
     public function __construct(
         public bool $success,
         public ?int $statusCode = null,
-        public ?string $body = null,
         public array $headers = [],
+        public ?string $body = null,
+        public ?string $bodyHash = null,
         public ?string $error = null,
     ) {
     }

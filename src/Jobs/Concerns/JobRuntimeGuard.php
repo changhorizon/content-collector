@@ -32,6 +32,7 @@ trait JobRuntimeGuard
 
     /**
      * 统一执行入口
+     * @throws Throwable
      */
     protected function guarded(callable $callback): void
     {

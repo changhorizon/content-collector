@@ -16,7 +16,6 @@ class ConfigParamsBuilder
             'delay_ms' => 1500,
             'jitter_ms' => 500,
             'max_urls' => 10000,
-            'max_depth' => 5,
         ],
         'client' => [
             'http_timeout' => 15,
@@ -97,7 +96,7 @@ class ConfigParamsBuilder
 
     protected function validateConfine(array $confine): void
     {
-        foreach (['delay_ms', 'jitter_ms', 'max_urls', 'max_depth'] as $k) {
+        foreach (['delay_ms', 'jitter_ms', 'max_urls'] as $k) {
             if (!is_int($confine[$k]) || $confine[$k] < 0) {
                 throw new InvalidArgumentException("Confine [$k] must be non-negative integer.");
             }
