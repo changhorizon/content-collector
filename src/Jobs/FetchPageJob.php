@@ -6,8 +6,11 @@ namespace ChangHorizon\ContentCollector\Jobs;
 
 use ChangHorizon\ContentCollector\Contracts\PageFetcherInterface;
 use ChangHorizon\ContentCollector\DTO\FetchResult;
+use ChangHorizon\ContentCollector\DTO\PageContext;
 use ChangHorizon\ContentCollector\Jobs\Concerns\JobRuntimeGuard;
 use ChangHorizon\ContentCollector\Models\RawPage;
+use ChangHorizon\ContentCollector\Models\UrlLedger;
+use ChangHorizon\ContentCollector\Policies\ContentPersistencePolicy;
 use ChangHorizon\ContentCollector\Services\HttpPageFetcher;
 use ChangHorizon\ContentCollector\Services\TaskFinalizer;
 use Illuminate\Bus\Queueable;
@@ -15,6 +18,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\DB;
 
 class FetchPageJob implements ShouldQueue
 {
@@ -24,20 +28,20 @@ class FetchPageJob implements ShouldQueue
     use SerializesModels;
     use JobRuntimeGuard;
 
-    public function __construct(
-        protected string $host,
-        protected string $url,
-        protected string $taskId,
-        protected array $params,
-        protected int $depth,
-        protected ?string $discoveredFrom = null,
-    ) {
+    protected ContentPersistencePolicy $policy;
+
+    public function __construct(protected PageContext $context)
+    {
+        $this->policy = new ContentPersistencePolicy();
     }
 
     public function handle(): void
     {
         $this->guarded(function () {
-            if ($this->alreadyFetched()) {
+            $this->markScheduled();
+
+            // 已终结 URL 不再处理
+            if ($this->isFinalized()) {
                 return;
             }
 
@@ -47,42 +51,98 @@ class FetchPageJob implements ShouldQueue
             }
 
             /** @var FetchResult $result */
-            $result = $fetcher->fetch($this->url, $this->params);
+            $result = $fetcher->fetch($this->context->url, $this->context->params);
 
-            $raw = $this->persistRawPage($result);
+            // 标记 fetched_at（事实）
+            $this->markFetched();
 
-            // ✅ 解析 & 调度都交给 ParsePageJob
-            ParsePageJob::dispatch(
-                rawPageId: $raw->id,
-                taskId: $this->taskId,
-                params: $this->params,
-            );
+            $rawPage = null;
+            // 条件写 raw_page
+            if ($this->policy->shouldPersist($this->context->taskId, $this->context->host, $this->context->params, $this->context->url)) {
+                DB::transaction(function () use ($result, &$rawPage) {
+                    $rawPage = $this->persistRawPage($result);
+                    $this->persisUrlLedger();
+                });
+            }
 
-            // ✅ Fetch 阶段只在这里尝试 finalize
-            TaskFinalizer::tryFinalize($this->taskId);
+            if ($result->success && !empty($result->body)) {
+                // 无条件进入 Parse 阶段
+                ParsePageJob::dispatch(
+                    context: new PageContext(
+                        taskId: $this->context->taskId,
+                        host: $this->context->host,
+                        params: $this->context->params,
+                        url: $this->context->url,
+                        fromUrl: $this->context->fromUrl,
+                        rawPageId: $rawPage?->id,
+                    ),
+                    rawHtml: $result->body, // 解析需要//不能查数据库，因为有可能没有存储
+                );
+            }
+
+            TaskFinalizer::tryFinalize($this->context->taskId);
         });
     }
 
-    protected function alreadyFetched(): bool
+    protected function isFinalized(): bool
     {
-        return RawPage::where('task_id', $this->taskId)
-            ->where('url', $this->url)
-            ->whereNotNull('fetched_at')
+        return UrlLedger::where('task_id', $this->context->taskId)
+            ->where('host', $this->context->host)
+            ->where('url', $this->context->url)
+            ->whereNotNull('final_result')
             ->exists();
     }
 
-    protected function persistRawPage(FetchResult $result): RawPage
+    protected function markScheduled(): void
+    {
+        UrlLedger::where('task_id', $this->context->taskId)
+            ->where('host', $this->context->host)
+            ->where('url', $this->context->url)
+            ->whereNull('scheduled_at')
+            ->update([
+                'scheduled_at' => now(),
+            ]);
+    }
+
+    protected function markFetched(): void
+    {
+        UrlLedger::where('task_id', $this->context->taskId)
+            ->where('host', $this->context->host)
+            ->where('url', $this->context->url)
+            ->update([
+                'fetched_at' => now(),
+            ]);
+    }
+
+    protected function persistRawPage(FetchResult $result): ?RawPage
     {
         return RawPage::updateOrCreate(
-            ['host' => $this->host, 'url' => $this->url],
             [
-                'task_id' => $this->taskId,
-                'status' => 'fetched',
-                'status_code' => $result->statusCode,
-                'headers' => $result->headers,
-                'body' => $result->body,
+                'task_id' => $this->context->taskId,
+                'host' => $this->context->host,
+                'url' => $this->context->url,
+            ],
+            [
+                'http_code' => $result->statusCode,
+                'http_headers' => $result->headers,
+                'raw_html' => $result->body,
+                'raw_html_hash' => $result->bodyHash,
                 'fetched_at' => now(),
-                'discovered_from' => $this->discoveredFrom,
+            ],
+        );
+    }
+
+    protected function persisUrlLedger(): UrlLedger
+    {
+        return UrlLedger::updateOrCreate(
+            [
+                'task_id' => $this->context->taskId,
+                'host' => $this->context->host,
+                'url' => $this->context->url,
+            ],
+            [
+                'from_url' => $this->context->fromUrl,
+                'fetched_at' => now(),
             ],
         );
     }

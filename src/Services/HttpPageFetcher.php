@@ -16,7 +16,7 @@ class HttpPageFetcher implements PageFetcherInterface
         try {
             $response = Http::withOptions($options)->get($url);
 
-            if (!$response->successful()) {
+            if (! $response->successful()) {
                 return new FetchResult(
                     success: false,
                     statusCode: $response->status(),
@@ -24,11 +24,14 @@ class HttpPageFetcher implements PageFetcherInterface
                 );
             }
 
+            $body = $response->body();
+
             return new FetchResult(
                 success: true,
                 statusCode: $response->status(),
-                body: $response->body(),
                 headers: $response->getHeaders(),
+                body: $body,
+                bodyHash: hash('sha256', $body),
             );
         } catch (Throwable $e) {
             return new FetchResult(

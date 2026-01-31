@@ -4,17 +4,23 @@ declare(strict_types=1);
 
 namespace ChangHorizon\ContentCollector\Jobs;
 
+use ChangHorizon\ContentCollector\Enums\ReferenceRelation;
+use ChangHorizon\ContentCollector\Enums\ReferenceTargetType;
 use ChangHorizon\ContentCollector\Factories\HttpClientFactory;
 use ChangHorizon\ContentCollector\Models\Media;
 use ChangHorizon\ContentCollector\Models\ParsedPage;
+use ChangHorizon\ContentCollector\Models\Reference;
 use ChangHorizon\ContentCollector\Services\ConcurrencyLimiter;
+use ChangHorizon\ContentCollector\Support\UrlNormalizer;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
+use Psr\Http\Message\ResponseInterface;
 use Throwable;
 
 class DownloadMediaJob implements ShouldQueue
@@ -24,35 +30,29 @@ class DownloadMediaJob implements ShouldQueue
     use Queueable;
     use SerializesModels;
 
-    protected string $host;
-    protected array $params;
-    protected string $taskId;
-    protected int $parsedPageId;
-    protected string $mediaUrl;
-
     public function __construct(
-        string $host,
-        array $params,
-        string $taskId,
-        int $parsedPageId,
-        string $mediaUrl,
+        protected string $host,
+        protected array $params,
+        protected string $taskId,
+        protected int $parsedPageId,
+        protected string $mediaUrl,
     ) {
-        $this->host = $host;
-        $this->params = $params;
-        $this->taskId = $taskId;
-        $this->parsedPageId = $parsedPageId;
-        $this->mediaUrl = $mediaUrl;
     }
 
     public function handle(): void
     {
         $parsedPage = ParsedPage::find($this->parsedPageId);
         if (!$parsedPage) {
-            Log::warning('[DownloadMediaJob] ParsedPage not found', [
-                'host' => $this->host,
-                'parsed_page_id' => $this->parsedPageId,
-                'media_url' => $this->mediaUrl,
-            ]);
+            return;
+        }
+
+        $normalizedUrl = UrlNormalizer::normalize($this->mediaUrl);
+
+        // 幂等：已下载直接跳过
+        if (Media::where('task_id', $this->taskId)
+            ->where('host', $this->host)
+            ->where('url', $normalizedUrl)
+            ->exists()) {
             return;
         }
 
@@ -60,82 +60,85 @@ class DownloadMediaJob implements ShouldQueue
             ConcurrencyLimiter::withLock(
                 $this->params,
                 $this->taskId,
-                function () use ($parsedPage) {
-                    $this->downloadMedia($parsedPage);
-                },
+                fn () => $this->downloadAndPersist($parsedPage, $normalizedUrl),
             );
         } catch (Throwable $e) {
-            Log::error('[DownloadMediaJob] Unhandled exception', [
-                'host' => $this->host,
+            Log::error('[DownloadMediaJob] failed', [
                 'task_id' => $this->taskId,
-                'parsed_page_id' => $this->parsedPageId,
-                'media_url' => $this->mediaUrl,
-                'exception' => $e->getMessage(),
+                'media_url' => $normalizedUrl,
+                'error' => $e->getMessage(),
             ]);
-
-            // 交给队列系统处理失败 / 重试
             throw $e;
         }
     }
 
-    protected function downloadMedia(ParsedPage $parsedPage): void
+    protected function downloadAndPersist(ParsedPage $parsedPage, string $normalizedUrl): void
     {
         $http = HttpClientFactory::create($this->params['client']);
-        $response = $http->get($this->mediaUrl, ['stream' => true]);
+        $response = $http->get($normalizedUrl, ['stream' => true]);
 
         if ($response->getStatusCode() !== 200) {
-            Log::warning('[DownloadMediaJob] Media request failed', [
-                'host' => $this->host,
-                'media_url' => $this->mediaUrl,
-                'status' => $response->getStatusCode(),
-            ]);
             return;
         }
 
-        $path = $this->generateLocalPath();
-        $contentLength = (int) $response->getHeaderLine('Content-Length');
+        $path = $this->generateLocalPath($response, $normalizedUrl);
 
-        if ($contentLength > 0 && $contentLength <= 5 * 1024 * 1024) {
-            Storage::put($path, $response->getBody()->getContents());
-        } else {
-            $resource = fopen('php://temp', 'r+');
-            $stream = $response->getBody();
+        // 写文件
+        Storage::writeStream($path, $response->getBody()->detach());
 
-            while (!$stream->eof()) {
-                fwrite($resource, $stream->read(1024));
-            }
+        DB::transaction(function () use ($parsedPage, $normalizedUrl, $response, $path) {
+            $media = Media::updateOrCreate(
+                [
+                    'task_id' => $this->taskId,
+                    'host' => $this->host,
+                    'url' => $normalizedUrl,
+                ],
+                [
+                    'http_code' => 200,
+                    'http_content_type' => $response->getHeaderLine('Content-Type'),
+                    'content_size' => Storage::size($path),
+                    'content_hash' => hash_file('sha256', Storage::path($path)),
+                    'storage_path' => $path,
+                    'downloaded_at' => now(),
+                ],
+            );
 
-            rewind($resource);
-            Storage::writeStream($path, $resource);
-            fclose($resource);
-        }
-
-        Media::updateOrCreate(
-            ['host' => $this->host, 'url' => $this->mediaUrl],
-            [
-                'parsed_page_id' => $parsedPage->id,
-                'local_path' => $path,
-                'mime_type' => $response->getHeaderLine('Content-Type') ?: 'application/octet-stream',
-                'size' => Storage::size($path),
-                'downloaded_at' => now(),
-            ],
-        );
+            // 写事实引用关系（raw_page -> media）
+            Reference::firstOrCreate(
+                [
+                    'raw_page_id' => $parsedPage->raw_page_id,
+                    'target_id' => $media->id,
+                    'target_type' => ReferenceTargetType::MEDIA->value,
+                ],
+                [
+                    'relation' => ReferenceRelation::EMBED->value,
+                ],
+            );
+        });
     }
 
-    protected function generateLocalPath(): string
+    protected function generateLocalPath(ResponseInterface $response, string $url): string
     {
-        $extension = pathinfo(
-            parse_url($this->mediaUrl, PHP_URL_PATH) ?? '',
-            PATHINFO_EXTENSION,
-        );
-
-        $hash = md5($this->mediaUrl);
-        $filename = uniqid($hash . '_', true);
-
-        if ($extension) {
-            $filename .= '.' . $extension;
-        }
+        $ext = $this->detectExtension($response, $url);
+        $filename = uniqid(md5($url) . '_', true) . ($ext ? '.' . $ext : '');
 
         return "content-collector/{$this->host}/{$filename}";
     }
+
+    protected function detectExtension(ResponseInterface $response, string $url): ?string
+    {
+        $type = strtolower(trim(explode(';', $response->getHeaderLine('Content-Type'))[0]));
+
+        return match ($type) {
+            'image/jpeg' => 'jpg',
+            'image/png' => 'png',
+            'image/webp' => 'webp',
+            'image/gif' => 'gif',
+            'image/svg+xml' => 'svg',
+            default => strtolower(
+                pathinfo(parse_url($url, PHP_URL_PATH) ?? '', PATHINFO_EXTENSION),
+            ) ?: null,
+        };
+    }
+
 }

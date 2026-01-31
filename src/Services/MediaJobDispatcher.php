@@ -13,6 +13,7 @@ class MediaJobDispatcher
      *
      * @param  string  $host
      * @param  array  $params
+     * @param  string  $taskId
      * @param  int  $parsedPageId
      * @param  array  $mediaUrls
      */

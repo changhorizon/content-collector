@@ -8,7 +8,6 @@ return [
         'delay_ms' => env('CRAWLER_DELAY_MS', 1500),
         'jitter_ms' => env('CRAWLER_JITTER_MS', 500),
         'max_urls' => env('CRAWLER_MAX_URLS', 10000),
-        'max_depth' => env('CRAWLER_MAX_DEPTH', 5),
     ],
 
     'redis' => [
