@@ -5,25 +5,37 @@ declare(strict_types=1);
 namespace ChangHorizon\ContentCollector\Models;
 
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Carbon;
 
+/**
+ * @property int $id
+ * @property string $task_id
+ * @property string $host
+ * @property string $url
+ * @property int|null $http_code
+ * @property string|null $http_content_type
+ * @property int|null $content_size
+ * @property string|null $content_hash
+ * @property string|null $storage_path
+ * @property Carbon|null $downloaded_at
+ */
 class Media extends Model
 {
     protected $table = 'content_collector_media';
 
     protected $fillable = [
+        'task_id',
         'host',
         'url',
-        'parsed_page_id',
-        'local_path',
-        'mime_type',
-        'size',
-        'hash',
+        'http_code',
+        'http_content_type',
+        'content_size',
+        'content_hash',
+        'storage_path',
         'downloaded_at',
     ];
 
-    public function parsedPage(): BelongsTo
-    {
-        return $this->belongsTo(ParsedPage::class);
-    }
+    protected $casts = [
+        'downloaded_at' => 'datetime',
+    ];
 }
