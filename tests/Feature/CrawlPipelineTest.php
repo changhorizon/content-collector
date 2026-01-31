@@ -53,28 +53,29 @@ class CrawlPipelineTest extends TestCase
         $job = new FetchPageJob($context);
         $job->handle();
 
-        // RawPage 应存在（因为 shouldPersist = true）
+        // RawPage 一定存在（事实）
         $this->assertDatabaseHas('content_collector_raw_pages', [
             'task_id' => $taskId,
             'host'    => $host,
             'url'     => 'https://example.com',
         ]);
 
-        // UrlLedger 必须存在
+        // UrlLedger 一定存在
         $this->assertDatabaseHas('content_collector_url_ledger', [
             'task_id' => $taskId,
             'host'    => $host,
             'url'     => 'https://example.com',
         ]);
 
-        // fetched_at 已写（事实）
+        // fetched_at 是事实
         $this->assertNotNull(
             UrlLedger::where('task_id', $taskId)
                 ->where('url', 'https://example.com')
                 ->value('fetched_at'),
         );
 
-        // ParseJob 必须被派发
+        // ParseJob 被派发即可
         Queue::assertPushed(ParsePageJob::class);
+
     }
 }

@@ -10,7 +10,6 @@ use ChangHorizon\ContentCollector\DTO\PageContext;
 use ChangHorizon\ContentCollector\Jobs\Concerns\JobRuntimeGuard;
 use ChangHorizon\ContentCollector\Models\RawPage;
 use ChangHorizon\ContentCollector\Models\UrlLedger;
-use ChangHorizon\ContentCollector\Policies\ContentPersistencePolicy;
 use ChangHorizon\ContentCollector\Services\HttpPageFetcher;
 use ChangHorizon\ContentCollector\Services\TaskFinalizer;
 use Illuminate\Bus\Queueable;
@@ -28,11 +27,9 @@ class FetchPageJob implements ShouldQueue
     use SerializesModels;
     use JobRuntimeGuard;
 
-    protected ContentPersistencePolicy $policy;
-
-    public function __construct(protected PageContext $context)
-    {
-        $this->policy = new ContentPersistencePolicy();
+    public function __construct(
+        protected PageContext $context,
+    ) {
     }
 
     public function handle(): void
@@ -45,41 +42,39 @@ class FetchPageJob implements ShouldQueue
                 return;
             }
 
+            /** @var PageFetcherInterface $fetcher */
             $fetcher = app(PageFetcherInterface::class);
-            if (!$fetcher instanceof PageFetcherInterface) {
+            if (! $fetcher instanceof PageFetcherInterface) {
                 $fetcher = new HttpPageFetcher();
             }
 
             /** @var FetchResult $result */
-            $result = $fetcher->fetch($this->context->url, $this->context->params);
+            $result = $fetcher->fetch(
+                $this->context->url,
+                $this->context->params,
+            );
 
-            // 标记 fetched_at（事实）
-            $this->markFetched();
+            DB::transaction(function () use ($result) {
+                // ① 永远持久化 RawPage（事实）
+                $rawPage = $this->persistRawPage($result);
 
-            $rawPage = null;
-            // 条件写 raw_page
-            if ($this->policy->shouldPersist($this->context->taskId, $this->context->host, $this->context->params, $this->context->url)) {
-                DB::transaction(function () use ($result, &$rawPage) {
-                    $rawPage = $this->persistRawPage($result);
-                    $this->persisUrlLedger();
-                });
-            }
+                // ② 更新 URL Ledger（事实）
+                $this->persistUrlLedger();
 
-            if ($result->success && !empty($result->body)) {
-                // 无条件进入 Parse 阶段
+                // ③ 派发 Parse（不传 raw_html）
                 ParsePageJob::dispatch(
-                    context: new PageContext(
+                    new PageContext(
                         taskId: $this->context->taskId,
                         host: $this->context->host,
                         params: $this->context->params,
                         url: $this->context->url,
                         fromUrl: $this->context->fromUrl,
-                        rawPageId: $rawPage?->id,
+                        rawPageId: $rawPage->id,
                     ),
-                    rawHtml: $result->body, // 解析需要//不能查数据库，因为有可能没有存储
                 );
-            }
+            });
 
+            // ④ 尝试结束 Task
             TaskFinalizer::tryFinalize($this->context->taskId);
         });
     }
@@ -104,44 +99,34 @@ class FetchPageJob implements ShouldQueue
             ]);
     }
 
-    protected function markFetched(): void
-    {
-        UrlLedger::where('task_id', $this->context->taskId)
-            ->where('host', $this->context->host)
-            ->where('url', $this->context->url)
-            ->update([
-                'fetched_at' => now(),
-            ]);
-    }
-
-    protected function persistRawPage(FetchResult $result): ?RawPage
+    protected function persistRawPage(FetchResult $result): RawPage
     {
         return RawPage::updateOrCreate(
             [
                 'task_id' => $this->context->taskId,
-                'host' => $this->context->host,
-                'url' => $this->context->url,
+                'host'    => $this->context->host,
+                'url'     => $this->context->url,
             ],
             [
-                'http_code' => $result->statusCode,
-                'http_headers' => $result->headers,
-                'raw_html' => $result->body,
+                'http_code'     => $result->statusCode,
+                'http_headers'  => $result->headers,
+                'raw_html'      => $result->body,
                 'raw_html_hash' => $result->bodyHash,
-                'fetched_at' => now(),
+                'fetched_at'    => now(),
             ],
         );
     }
 
-    protected function persisUrlLedger(): UrlLedger
+    protected function persistUrlLedger(): void
     {
-        return UrlLedger::updateOrCreate(
+        UrlLedger::updateOrCreate(
             [
                 'task_id' => $this->context->taskId,
-                'host' => $this->context->host,
-                'url' => $this->context->url,
+                'host'    => $this->context->host,
+                'url'     => $this->context->url,
             ],
             [
-                'from_url' => $this->context->fromUrl,
+                'from_url'  => $this->context->fromUrl,
                 'fetched_at' => now(),
             ],
         );

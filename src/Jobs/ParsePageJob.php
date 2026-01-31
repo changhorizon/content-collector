@@ -14,6 +14,7 @@ use ChangHorizon\ContentCollector\Models\ParsedPage;
 use ChangHorizon\ContentCollector\Models\RawPage;
 use ChangHorizon\ContentCollector\Models\Reference;
 use ChangHorizon\ContentCollector\Models\UrlLedger;
+use ChangHorizon\ContentCollector\Policies\ContentPersistencePolicy;
 use ChangHorizon\ContentCollector\Schedulers\PageJobScheduler;
 use ChangHorizon\ContentCollector\Services\SimpleHtmlParser;
 use ChangHorizon\ContentCollector\Support\UrlNormalizer;
@@ -33,25 +34,37 @@ class ParsePageJob implements ShouldQueue
     use JobRuntimeGuard;
 
     protected PageParserInterface $parser;
+    protected ContentPersistencePolicy $policy;
 
     public function __construct(
         protected PageContext $context,
-        protected string $rawHtml,
         ?PageParserInterface $parser = null,
     ) {
         $this->parser = $parser ?? new SimpleHtmlParser();
+        $this->policy = new ContentPersistencePolicy();
     }
 
     public function handle(): void
     {
         $this->guarded(function () {
-            // 幂等：已解析则跳过
+            // 幂等：已解析直接跳过
             if ($this->alreadyParsed()) {
                 return;
             }
 
+            // ① 从 DB 读取 RawPage（唯一事实源）
+            $raw = RawPage::where('task_id', $this->context->taskId)
+                ->where('host', $this->context->host)
+                ->where('url', $this->context->url)
+                ->first();
+
+            if (! $raw || empty($raw->raw_html)) {
+                return;
+            }
+
+            // ② 解析 HTML
             $result = $this->parser->parse(
-                $this->rawHtml,
+                $raw->raw_html,
                 $this->context->url,
             );
 
@@ -59,17 +72,27 @@ class ParsePageJob implements ShouldQueue
                 return;
             }
 
-            DB::transaction(function () use ($result) {
-                if ($this->context->rawPageId) {
-                    $this->persistParsedPage($result);
-                    $this->persistReferences($result);
+            DB::transaction(function () use ($result, $raw) {
+                // ③ Parse 阶段决定是否产生派生事实
+                if ($this->policy->shouldPersist(
+                    $this->context->taskId,
+                    $this->context->host,
+                    $this->context->params,
+                    $this->context->url,
+                )) {
+                    $this->persistParsedPage($result, $raw);
+                    $this->persistReferences($result, $raw);
                 }
 
+                // ④ 无论是否持久化，解析事实都要标记
                 $this->markParsed();
             });
 
-            // 统一调度新 URL
-            (new PageJobScheduler())->schedule(context: $this->context, links: $result->links);
+            // ⑤ 调度新 URL（解析的自然结果）
+            (new PageJobScheduler())->schedule(
+                context: $this->context,
+                links: $result->links,
+            );
         });
     }
 
@@ -82,23 +105,25 @@ class ParsePageJob implements ShouldQueue
             ->exists();
     }
 
-    protected function persistParsedPage(ParseResult $result): void
+    protected function persistParsedPage(ParseResult $result, RawPage $raw): void
     {
-        ParsedPage::create([
-            'raw_page_id' => $this->context->rawPageId,
-            'host'        => $this->context->host,
-            'url'         => $this->context->url,
-            'html_title'  => $result->title,
-            'html_body'   => $result->bodyHtml,
-            'html_meta'   => $result->meta,
-            'parsed_at'   => now(),
-        ]);
+        ParsedPage::updateOrCreate(
+            [
+                'raw_page_id' => $raw->id,
+                'host'        => $this->context->host,
+                'url'         => $this->context->url,
+            ],
+            [
+                'html_title' => $result->title,
+                'html_body'  => $result->bodyHtml,
+                'html_meta'  => $result->meta,
+                'parsed_at'  => now(),
+            ],
+        );
     }
 
-    protected function persistReferences(ParseResult $result): void
+    protected function persistReferences(ParseResult $result, RawPage $source): void
     {
-        $sourceRawPageId = $this->context->rawPageId;
-
         foreach (array_unique($result->links) as $link) {
             $normalized = UrlNormalizer::normalize($link);
 
@@ -112,7 +137,7 @@ class ParsePageJob implements ShouldQueue
 
             Reference::firstOrCreate(
                 [
-                    'raw_page_id' => $sourceRawPageId,
+                    'raw_page_id' => $source->id,
                     'target_id'   => $target->id,
                     'target_type' => ReferenceTargetType::PAGE->value,
                 ],
