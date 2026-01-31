@@ -5,8 +5,8 @@ declare(strict_types=1);
 namespace ChangHorizon\ContentCollector\Policies;
 
 use ChangHorizon\ContentCollector\Models\RawPage;
-use ChangHorizon\ContentCollector\Support\UrlNormalizer;
 use ChangHorizon\ContentCollector\Support\PathMatcher;
+use ChangHorizon\ContentCollector\Support\UrlNormalizer;
 
 class ContentPersistencePolicy
 {
@@ -20,9 +20,10 @@ class ContentPersistencePolicy
         string $url,
     ): bool {
         $normalized = UrlNormalizer::normalize($url);
+        $full = (bool) ($params['site']['full'] ?? false);
 
         /**
-         * ① 已存在内容（同一 task）
+         * ① task 内唯一（永远成立）
          */
         if (RawPage::where('task_id', $taskId)
             ->where('host', $host)
@@ -32,7 +33,18 @@ class ContentPersistencePolicy
         }
 
         /**
-         * ③ 内容规则判断
+         * ② 增量模式：历史已存在则跳过
+         */
+        if (! $full) {
+            if (RawPage::where('host', $host)
+                ->where('url', $normalized)
+                ->exists()) {
+                return false;
+            }
+        }
+
+        /**
+         * ③ 内容路径规则
          */
         $priority = $params['site']['priority'] ?? 'black';
         $allow = $params['site']['allow'] ?? [];
@@ -41,7 +53,7 @@ class ContentPersistencePolicy
         $path = parse_url($normalized, PHP_URL_PATH) ?? '/';
         $path = strtolower('/' . ltrim(rawurldecode($path), '/'));
 
-        if (!in_array($priority, ['black', 'white'], true)) {
+        if (! in_array($priority, ['black', 'white'], true)) {
             $priority = 'black';
         }
 
@@ -49,11 +61,11 @@ class ContentPersistencePolicy
             if ($deny && PathMatcher::matches($path, $deny)) {
                 return false;
             }
-            if ($allow && !PathMatcher::matches($path, $allow)) {
+            if ($allow && ! PathMatcher::matches($path, $allow)) {
                 return false;
             }
         } else {
-            if ($allow && !PathMatcher::matches($path, $allow)) {
+            if ($allow && ! PathMatcher::matches($path, $allow)) {
                 return false;
             }
             if ($deny && PathMatcher::matches($path, $deny)) {
