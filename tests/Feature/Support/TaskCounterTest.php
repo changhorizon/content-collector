@@ -6,6 +6,7 @@ namespace ChangHorizon\ContentCollector\Tests\Feature\Support;
 
 use ChangHorizon\ContentCollector\Support\TaskCounter;
 use ChangHorizon\ContentCollector\Tests\TestCase;
+use Illuminate\Support\Facades\Redis;
 
 class TaskCounterTest extends TestCase
 {
@@ -13,7 +14,9 @@ class TaskCounterTest extends TestCase
     {
         $taskId = 'test-task-' . uniqid();
         $host = 'example.com';
-        $prefix = 'test:counter';
+        $prefix = 'test:counter:';
+
+        Redis::del("{$prefix}{$host}:{$taskId}");
 
         $counter = new TaskCounter(
             taskId: $taskId,
