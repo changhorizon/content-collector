@@ -10,6 +10,23 @@ use Illuminate\Support\Facades\Redis;
 
 class TaskCounterTest extends TestCase
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        Redis::shouldReceive('connection')
+            ->andReturnSelf();
+
+        Redis::shouldReceive('get')
+            ->andReturn(null);
+
+        Redis::shouldReceive('incr')
+            ->andReturnUsing(fn () => 1);
+
+        Redis::shouldReceive('del')
+            ->andReturn(1);
+    }
+
     public function test_task_counter_increment_is_consistent(): void
     {
         $taskId = 'test-task-' . uniqid();
