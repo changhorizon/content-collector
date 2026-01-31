@@ -10,63 +10,57 @@ use ChangHorizon\ContentCollector\Tests\TestCase;
 
 class ContentPersistencePolicyFullTest extends TestCase
 {
-    public function test_incremental_mode_skips_existing_raw_page(): void
+    public function test_incremental_mode_skips_existing_raw(): void
     {
         $policy = new ContentPersistencePolicy();
 
-        $taskId = 'task-new';
-        $host   = 'example.com';
-        $url    = 'https://example.com/page';
-
-        // 历史 RawPage（不同 task）
         RawPage::create([
-            'task_id'  => 'task-old',
-            'host'     => $host,
-            'url'      => $url,
-            'raw_html' => '<html></html>',
+            'task_id' => 'old-task',
+            'host'    => 'example.com',
+            'url'     => 'https://example.com/page',
         ]);
 
-        $params = [
-            'site' => [
-                'full'     => false, // 增量模式
-                'priority' => 'black',
-                'allow'    => ['/*'],
-                'deny'     => [],
-            ],
-        ];
-
         $this->assertFalse(
-            $policy->shouldPersist($taskId, $host, $params, $url),
+            $policy->shouldPersist(
+                'new-task',
+                'example.com',
+                [
+                    'site' => [
+                        'full' => false,
+                        'priority' => 'black',
+                        'allow' => ['/*'],
+                        'deny' => [],
+                    ],
+                ],
+                'https://example.com/page',
+            ),
         );
     }
 
-    public function test_full_mode_allows_persisting_even_if_raw_page_exists(): void
+    public function test_full_mode_allows_repersisting_existing_raw(): void
     {
         $policy = new ContentPersistencePolicy();
 
-        $taskId = 'task-new';
-        $host   = 'example.com';
-        $url    = 'https://example.com/page';
-
-        // 历史 RawPage（不同 task）
         RawPage::create([
-            'task_id'  => 'task-old',
-            'host'     => $host,
-            'url'      => $url,
-            'raw_html' => '<html></html>',
+            'task_id' => 'old-task',
+            'host'    => 'example.com',
+            'url'     => 'https://example.com/page',
         ]);
 
-        $params = [
-            'site' => [
-                'full'     => true, // 全量模式
-                'priority' => 'black',
-                'allow'    => ['/*'],
-                'deny'     => [],
-            ],
-        ];
-
         $this->assertTrue(
-            $policy->shouldPersist($taskId, $host, $params, $url),
+            $policy->shouldPersist(
+                'new-task',
+                'example.com',
+                [
+                    'site' => [
+                        'full' => true,
+                        'priority' => 'black',
+                        'allow' => ['/*'],
+                        'deny' => [],
+                    ],
+                ],
+                'https://example.com/page',
+            ),
         );
     }
 }
