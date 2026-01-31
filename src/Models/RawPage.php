@@ -5,17 +5,20 @@ declare(strict_types=1);
 namespace ChangHorizon\ContentCollector\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Carbon;
 
 /**
  * @property int $id
+ * @property string $task_id
  * @property string $host
  * @property string $url
- * @property string $status
- * @property string|null $content
  * @property int|null $http_code
+ * @property array|null $http_headers
+ * @property string|null $raw_html
+ * @property string|null $raw_html_hash
  * @property Carbon|null $fetched_at
- * @property Carbon|null $parsed_at
  */
 class RawPage extends Model
 {
@@ -25,36 +28,25 @@ class RawPage extends Model
         'task_id',
         'host',
         'url',
-        'depth',
-        'status',
-        'status_code',
-        'headers',
-        'raw_content',
-        'discovered_from',
+        'http_code',
+        'http_headers',
+        'raw_html',
+        'raw_html_hash',
         'fetched_at',
-        'parsed_at',
     ];
 
     protected $casts = [
-        'headers' => 'array',
-        'first_seen_at' => 'datetime',
+        'http_headers' => 'array',
         'fetched_at' => 'datetime',
-        'parsed_at' => 'datetime',
     ];
 
-    /**
-     * 是否已成功抓取
-     */
-    public function isFetched(): bool
+    public function parsedPage(): HasOne
     {
-        return $this->status === 'fetched';
+        return $this->hasOne(ParsedPage::class, 'raw_page_id');
     }
 
-    /**
-     * 是否已解析
-     */
-    public function isParsed(): bool
+    public function references(): HasMany
     {
-        return $this->parsed_at !== null;
+        return $this->hasMany(Reference::class, 'raw_page_id');
     }
 }
