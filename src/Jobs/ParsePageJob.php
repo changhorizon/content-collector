@@ -5,19 +5,23 @@ declare(strict_types=1);
 namespace ChangHorizon\ContentCollector\Jobs;
 
 use ChangHorizon\ContentCollector\Contracts\PageParserInterface;
+use ChangHorizon\ContentCollector\DTO\MediaContext;
 use ChangHorizon\ContentCollector\DTO\PageContext;
 use ChangHorizon\ContentCollector\DTO\ParseResult;
 use ChangHorizon\ContentCollector\Enums\ReferenceRelation;
 use ChangHorizon\ContentCollector\Enums\ReferenceTargetType;
+use ChangHorizon\ContentCollector\Enums\UrlLedgerResult;
 use ChangHorizon\ContentCollector\Jobs\Concerns\JobRuntimeGuard;
 use ChangHorizon\ContentCollector\Models\ParsedPage;
 use ChangHorizon\ContentCollector\Models\RawPage;
 use ChangHorizon\ContentCollector\Models\Reference;
 use ChangHorizon\ContentCollector\Models\UrlLedger;
 use ChangHorizon\ContentCollector\Policies\ContentPersistencePolicy;
+use ChangHorizon\ContentCollector\Schedulers\MediaDownloadScheduler;
 use ChangHorizon\ContentCollector\Schedulers\PageJobScheduler;
+use ChangHorizon\ContentCollector\Services\LinkExtractor;
 use ChangHorizon\ContentCollector\Services\SimpleHtmlParser;
-use ChangHorizon\ContentCollector\Support\UrlNormalizer;
+use ChangHorizon\ContentCollector\Services\TaskFinalizer;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -33,67 +37,108 @@ class ParsePageJob implements ShouldQueue
     use SerializesModels;
     use JobRuntimeGuard;
 
-    protected PageParserInterface $parser;
-    protected ContentPersistencePolicy $policy;
-
     public function __construct(
         protected PageContext $context,
-        ?PageParserInterface $parser = null,
+        protected ?PageParserInterface $parser = null,
+        protected ?ContentPersistencePolicy $policy = null,
+        protected ?LinkExtractor $linkExtractor = null,
+        protected ?TaskFinalizer $finalizer = null,
     ) {
         $this->parser = $parser ?? new SimpleHtmlParser();
-        $this->policy = new ContentPersistencePolicy();
+        $this->policy = $policy ?? new ContentPersistencePolicy();
+        $this->linkExtractor = $linkExtractor ?? new LinkExtractor($context->host);
+        $this->finalizer = $this->finalizer ?? new TaskFinalizer();
     }
 
     public function handle(): void
     {
-        $this->guarded(function () {
-            // 幂等：已解析直接跳过
+        /** @var PageContext[] $nextContexts */
+        $nextContexts = $this->guarded(function () {
             if ($this->alreadyParsed()) {
-                return;
+                return [];
             }
 
-            // ① 从 DB 读取 RawPage（唯一事实源）
+            // ① RawPage 是唯一事实源
             $raw = RawPage::where('task_id', $this->context->taskId)
                 ->where('host', $this->context->host)
                 ->where('url', $this->context->url)
                 ->first();
 
-            if (! $raw || empty($raw->raw_html)) {
-                return;
+            if (!$raw || empty($raw->raw_html)) {
+                return [];
             }
 
-            // ② 解析 HTML
-            $result = $this->parser->parse(
-                $raw->raw_html,
-                $this->context->url,
-            );
+            // ② parse
+            $result = $this->parser->parse($raw->raw_html);
 
-            if (! $result->success) {
-                return;
+            if (!$result->success) {
+                $this->markFinal(
+                    UrlLedgerResult::FAILED,
+                    'parse_failed',
+                );
+                return [];
             }
 
-            DB::transaction(function () use ($result, $raw) {
-                // ③ Parse 阶段决定是否产生派生事实
-                if ($this->policy->shouldPersist(
+            $this->markParsed();
+
+            $parsedPage = DB::transaction(function () use ($result, $raw) {
+                if (!$this->policy->decide(
                     $this->context->taskId,
                     $this->context->host,
                     $this->context->params,
                     $this->context->url,
                 )) {
-                    $this->persistParsedPage($result, $raw);
-                    $this->persistReferences($result, $raw);
-                }
+                    $this->markFinal(
+                        UrlLedgerResult::SKIPPED,
+                        'policy_skipped',
+                    );
 
-                // ④ 无论是否持久化，解析事实都要标记
-                $this->markParsed();
+                    return null;
+                } else {
+                    $parsedPage = $this->persistParsedPage($result, $raw);
+                    $this->persistReferences($result, $raw);
+                    $this->markFinal(
+                        UrlLedgerResult::SUCCESS,
+                        'parsed',
+                    );
+
+                    return $parsedPage;
+                }
             });
 
-            // ⑤ 调度新 URL（解析的自然结果）
-            (new PageJobScheduler())->schedule(
+            if ($parsedPage) {
+                $mediaUrls = $this->linkExtractor->extract($result->mediaUrls, $this->context->url);
+                if (!empty($mediaUrls)) {
+                    $context = new MediaContext(
+                        taskId: $this->context->taskId,
+                        host: $this->context->host,
+                        params: $this->context->params,
+                        sourceParsedPageId: $parsedPage->id,
+                    );
+                    MediaDownloadScheduler::schedule($context, $mediaUrls);
+                }
+            }
+
+            $links = $this->linkExtractor->extract($result->links, $this->context->url);
+
+            if ($links === []) {
+                return [];
+            }
+
+            // ③ 只计算“接下来要抓什么”
+            return (new PageJobScheduler())->schedule(
                 context: $this->context,
-                links: $result->links,
+                links: $links,
             );
         });
+
+        // ✅ guarded + transaction 完全结束之后，再 dispatch
+        foreach ($nextContexts as $ctx) {
+            FetchPageJob::dispatch($ctx)
+                ->onQueue($this->context->params['queues']['crawl']);
+        }
+
+        $this->finalizer->tryFinish($this->context->taskId);
     }
 
     protected function alreadyParsed(): bool
@@ -101,23 +146,24 @@ class ParsePageJob implements ShouldQueue
         return UrlLedger::where('task_id', $this->context->taskId)
             ->where('host', $this->context->host)
             ->where('url', $this->context->url)
-            ->whereNotNull('parsed_at')
+            ->whereNotNull('final_result')
             ->exists();
     }
 
-    protected function persistParsedPage(ParseResult $result, RawPage $raw): void
+    protected function persistParsedPage(ParseResult $result, RawPage $raw): ParsedPage
     {
-        ParsedPage::updateOrCreate(
+        return ParsedPage::updateOrCreate(
             [
                 'raw_page_id' => $raw->id,
-                'host'        => $this->context->host,
-                'url'         => $this->context->url,
             ],
             [
+                'host' => $this->context->host,
+                'url' => $this->context->url,
                 'html_title' => $result->title,
-                'html_body'  => $result->bodyHtml,
-                'html_meta'  => $result->meta,
-                'parsed_at'  => now(),
+                'html_body' => $result->bodyHtml,
+                'html_meta' => $result->meta,
+                'parsed_at' => now(),
+                'last_task_id' => $this->context->taskId,
             ],
         );
     }
@@ -125,20 +171,18 @@ class ParsePageJob implements ShouldQueue
     protected function persistReferences(ParseResult $result, RawPage $source): void
     {
         foreach (array_unique($result->links) as $link) {
-            $normalized = UrlNormalizer::normalize($link);
-
             $target = RawPage::where('host', $this->context->host)
-                ->where('url', $normalized)
+                ->where('url', $link)
                 ->first();
 
-            if (! $target) {
+            if (!$target) {
                 continue;
             }
 
             Reference::firstOrCreate(
                 [
                     'raw_page_id' => $source->id,
-                    'target_id'   => $target->id,
+                    'target_id' => $target->id,
                     'target_type' => ReferenceTargetType::PAGE->value,
                 ],
                 [
@@ -157,4 +201,19 @@ class ParsePageJob implements ShouldQueue
                 'parsed_at' => now(),
             ]);
     }
+
+    protected function markFinal(
+        UrlLedgerResult $result,
+        string $reason,
+    ): void {
+        UrlLedger::where('task_id', $this->context->taskId)
+            ->where('host', $this->context->host)
+            ->where('url', $this->context->url)
+            ->whereNull('final_result') // 👈 防止重复盖章
+            ->update([
+                'final_result' => $result->value,
+                'final_reason' => $reason,
+            ]);
+    }
+
 }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ChangHorizon\ContentCollector\Jobs;
 
+use ChangHorizon\ContentCollector\DTO\MediaContext;
 use ChangHorizon\ContentCollector\Enums\ReferenceRelation;
 use ChangHorizon\ContentCollector\Enums\ReferenceTargetType;
 use ChangHorizon\ContentCollector\Factories\HttpClientFactory;
@@ -11,7 +12,6 @@ use ChangHorizon\ContentCollector\Models\Media;
 use ChangHorizon\ContentCollector\Models\ParsedPage;
 use ChangHorizon\ContentCollector\Models\Reference;
 use ChangHorizon\ContentCollector\Services\ConcurrencyLimiter;
-use ChangHorizon\ContentCollector\Support\UrlNormalizer;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -31,67 +31,64 @@ class DownloadMediaJob implements ShouldQueue
     use SerializesModels;
 
     public function __construct(
-        protected string $host,
-        protected array $params,
-        protected string $taskId,
-        protected int $parsedPageId,
+        protected MediaContext $context,
         protected string $mediaUrl,
     ) {
     }
 
+    /**
+     * @throws Throwable
+     */
     public function handle(): void
     {
-        $parsedPage = ParsedPage::find($this->parsedPageId);
+        $parsedPage = ParsedPage::find($this->context->sourceParsedPageId);
         if (!$parsedPage) {
+            // ParsedPage 不存在，说明该 MediaJob 已失去语义来源，安全退出
             return;
         }
 
-        $normalizedUrl = UrlNormalizer::normalize($this->mediaUrl);
-
         // 幂等：已下载直接跳过
-        if (Media::where('task_id', $this->taskId)
-            ->where('host', $this->host)
-            ->where('url', $normalizedUrl)
+        if (Media::where('host', $this->context->host)
+            ->where('url', $this->mediaUrl)
             ->exists()) {
             return;
         }
 
         try {
             ConcurrencyLimiter::withLock(
-                $this->params,
-                $this->taskId,
-                fn () => $this->downloadAndPersist($parsedPage, $normalizedUrl),
+                $this->context->params,
+                $this->context->taskId,
+                fn () => $this->downloadAndPersist($parsedPage),
             );
         } catch (Throwable $e) {
             Log::error('[DownloadMediaJob] failed', [
-                'task_id' => $this->taskId,
-                'media_url' => $normalizedUrl,
+                'last_task_id' => $this->context->taskId,
+                'media_url' => $this->mediaUrl,
                 'error' => $e->getMessage(),
             ]);
             throw $e;
         }
     }
 
-    protected function downloadAndPersist(ParsedPage $parsedPage, string $normalizedUrl): void
+    protected function downloadAndPersist(ParsedPage $parsedPage): void
     {
-        $http = HttpClientFactory::create($this->params['client']);
-        $response = $http->get($normalizedUrl, ['stream' => true]);
+        $http = HttpClientFactory::create($this->context->params['client']);
+        $response = $http->get($this->mediaUrl, ['stream' => true]);
 
         if ($response->getStatusCode() !== 200) {
             return;
         }
 
-        $path = $this->generateLocalPath($response, $normalizedUrl);
+        $path = $this->generateLocalPath($response, $this->mediaUrl);
 
         // 写文件
         Storage::writeStream($path, $response->getBody()->detach());
 
-        DB::transaction(function () use ($parsedPage, $normalizedUrl, $response, $path) {
+        DB::transaction(function () use ($parsedPage, $response, $path) {
             $media = Media::updateOrCreate(
                 [
-                    'task_id' => $this->taskId,
-                    'host' => $this->host,
-                    'url' => $normalizedUrl,
+                    'host' => $this->context->host,
+                    'url' => $this->mediaUrl,
                 ],
                 [
                     'http_code' => 200,
@@ -100,6 +97,7 @@ class DownloadMediaJob implements ShouldQueue
                     'content_hash' => hash_file('sha256', Storage::path($path)),
                     'storage_path' => $path,
                     'downloaded_at' => now(),
+                    'last_task_id' => $this->context->taskId,
                 ],
             );
 
@@ -122,7 +120,7 @@ class DownloadMediaJob implements ShouldQueue
         $ext = $this->detectExtension($response, $url);
         $filename = uniqid(md5($url) . '_', true) . ($ext ? '.' . $ext : '');
 
-        return "content-collector/{$this->host}/{$filename}";
+        return "content-collector/{$this->context->host}/{$filename}";
     }
 
     protected function detectExtension(ResponseInterface $response, string $url): ?string

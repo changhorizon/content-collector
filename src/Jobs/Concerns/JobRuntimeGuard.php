@@ -9,43 +9,37 @@ use Throwable;
 
 trait JobRuntimeGuard
 {
-    /**
-     * Job 最大尝试次数
-     */
     public int $tries = 3;
-
-    /**
-     * Job 超时时间（秒）
-     */
     public int $timeout = 30;
 
-    /**
-     * Job 永久失败时回调
-     */
     public function failed(Throwable $e): void
     {
         Log::error(static::class . ' permanently failed', [
-            'job' => static::class,
+            'job'   => static::class,
             'error' => $e->getMessage(),
         ]);
     }
 
     /**
-     * 统一执行入口
+     * 统一 job 执行边界
+     *
+     * @template T
+     * @param callable(): T $callback
+     * @return T
+     *
      * @throws Throwable
      */
-    protected function guarded(callable $callback): void
+    protected function guarded(callable $callback)
     {
         try {
-            $callback();
+            return $callback();
         } catch (Throwable $e) {
             Log::warning(static::class . ' failed', [
-                'job' => static::class,
+                'job'      => static::class,
                 'attempts' => method_exists($this, 'attempts') ? $this->attempts() : null,
-                'error' => $e->getMessage(),
+                'error'    => $e->getMessage(),
             ]);
 
-            // Laravel 会根据 $tries 自动控制是否重试
             throw $e;
         }
     }
