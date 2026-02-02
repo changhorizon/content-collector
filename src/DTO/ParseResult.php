@@ -11,6 +11,7 @@ class ParseResult
         public ?string $title = null,
         public ?string $bodyHtml = null,
         public array $links = [],
+        public array $mediaUrls = [],
         public array $meta = [],
         public ?string $error = null,
     ) {

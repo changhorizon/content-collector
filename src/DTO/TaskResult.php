@@ -5,26 +5,25 @@ declare(strict_types=1);
 namespace ChangHorizon\ContentCollector\DTO;
 
 use DateTimeInterface;
-use Illuminate\Support\Collection;
 
 class TaskResult
 {
+    public string $taskId;
     public string $host;
-    public Collection $parsedPages;
-    public Collection $media;
+    public string $status;
     public DateTimeInterface $startedAt;
     public DateTimeInterface $finishedAt;
 
     public function __construct(
+        string $taskId,
         string $host,
-        Collection $parsedPages,
-        Collection $media,
+        string $status,
         DateTimeInterface $startedAt,
         DateTimeInterface $finishedAt,
     ) {
+        $this->taskId = $taskId;
         $this->host = $host;
-        $this->parsedPages = $parsedPages;
-        $this->media = $media;
+        $this->status = $status;
         $this->startedAt = $startedAt;
         $this->finishedAt = $finishedAt;
     }
