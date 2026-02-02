@@ -91,12 +91,15 @@ class DownloadMediaJob implements ShouldQueue
                     'url' => $this->mediaUrl,
                 ],
                 [
-                    'http_code' => 200,
+                    'source_path' => parse_url($this->mediaUrl, PHP_URL_PATH),
+                    'source_filename' => basename(parse_url($this->mediaUrl, PHP_URL_PATH) ?? ''),
+                    'source_query' => parse_url($this->mediaUrl, PHP_URL_QUERY),
+                    'http_status_code' => 200,
                     'http_content_type' => $response->getHeaderLine('Content-Type'),
                     'content_size' => Storage::size($path),
                     'content_hash' => hash_file('sha256', Storage::path($path)),
                     'storage_path' => $path,
-                    'downloaded_at' => now(),
+                    'stored_at' => now(),
                     'last_task_id' => $this->context->taskId,
                 ],
             );

@@ -11,12 +11,15 @@ use Illuminate\Support\Carbon;
  * @property int $id
  * @property string $host
  * @property string $url
- * @property int|null $http_code
+ * @property string|null $source_path
+ * @property string|null $source_filename
+ * @property string|null $source_query
+ * @property int|null $http_status_code
  * @property string|null $http_content_type
  * @property int|null $content_size
  * @property string|null $content_hash
  * @property string|null $storage_path
- * @property Carbon|null $downloaded_at
+ * @property Carbon|null $stored_at
  * @property string|null $last_task_id
  */
 class Media extends Model
@@ -26,16 +29,19 @@ class Media extends Model
     protected $fillable = [
         'host',
         'url',
-        'http_code',
+        'source_path',
+        'source_filename',
+        'source_query',
+        'http_status_code',
         'http_content_type',
         'content_size',
         'content_hash',
         'storage_path',
-        'downloaded_at',
+        'stored_at',
         'last_task_id',
     ];
 
     protected $casts = [
-        'downloaded_at' => 'datetime',
+        'stored_at' => 'datetime',
     ];
 }

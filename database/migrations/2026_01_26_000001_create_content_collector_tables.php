@@ -65,18 +65,21 @@ return new class () extends Migration {
         */
         Schema::create('content_collector_media', function (Blueprint $table) {
             $table->id();
-            $table->string('host')->comment('媒体资源所属主机');
-            $table->string('url')->comment('媒体资源 URL');
-            $table->smallInteger('http_code')->nullable()->comment('媒体请求返回状态码');
+            $table->string('host')->comment('媒体资源所属主机（语义主机）');
+            $table->string('url')->comment('媒体资源原始完整 URL（语义锚点）');
+            $table->string('source_path')->nullable()->comment('原始 URL path（用于 HTML 重写）');
+            $table->string('source_filename')->nullable()->comment('原始文件名（如 cat.png）');
+            $table->string('source_query')->nullable()->comment('原始 URL query（可选保留）');
+            $table->smallInteger('http_status_code')->nullable()->comment('媒体请求返回状态码');
             $table->string('http_content_type')->nullable()->comment('服务器返回的内容类型');
             $table->bigInteger('content_size')->nullable()->comment('媒体内容大小（字节）');
-            $table->string('content_hash')->nullable()->comment('媒体内容哈希');
-            $table->string('storage_path')->nullable()->comment('媒体存储路径');
-            $table->timestamp('downloaded_at')->nullable()->comment('媒体下载完成时间');
+            $table->string('content_hash')->nullable()->comment('媒体内容哈希（用于去重 / 校验）');
+            $table->string('storage_path')->nullable()->comment('本地/对象存储路径（非语义）');
+            $table->timestamp('stored_at')->nullable()->comment('媒体存储完成时间');
             $table->string('last_task_id')->nullable()->index()->comment('最近一次下载/更新该媒体的采集任务 ID');
             $table->timestamps();
             $table->unique(['host', 'url']);
-            $table->comment('页面引用的外部媒体资源');
+            $table->comment('页面引用的外部媒体资源（语义 URL → 物理存储映射）');
         });
 
         /*
