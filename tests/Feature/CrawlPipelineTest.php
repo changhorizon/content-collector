@@ -7,7 +7,6 @@ namespace ChangHorizon\ContentCollector\Tests\Feature;
 use ChangHorizon\ContentCollector\DTO\PageContext;
 use ChangHorizon\ContentCollector\Jobs\FetchPageJob;
 use ChangHorizon\ContentCollector\Jobs\ParsePageJob;
-use ChangHorizon\ContentCollector\Models\RawPage;
 use ChangHorizon\ContentCollector\Models\UrlLedger;
 use ChangHorizon\ContentCollector\Tests\TestCase;
 use Illuminate\Support\Facades\Http;
@@ -18,6 +17,7 @@ class CrawlPipelineTest extends TestCase
     public function test_fetch_parse_schedule_pipeline(): void
     {
         Queue::fake();
+
         Http::fake([
             'https://example.com' => Http::response(
                 '<html><body><a href="/next">Next</a></body></html>',
@@ -28,9 +28,11 @@ class CrawlPipelineTest extends TestCase
 
         $taskId = 'task-' . uniqid();
         $host = 'example.com';
+        $url = 'https://example.com';
 
         $params = [
             'site' => [
+                'entry' => $url,
                 'priority' => 'black',
                 'allow' => ['/*'],
                 'deny' => [],
@@ -38,44 +40,60 @@ class CrawlPipelineTest extends TestCase
             'confine' => [
                 'max_urls' => 100,
             ],
+            'queues' => [
+                'default' => 'cc-default',
+                'crawl' => 'cc-crawl',
+                'parse' => 'cc-parse',
+                'media' => 'cc-media',
+            ],
+            'client' => [
+                'http_timeout' => 5,
+                'user_agent' => 'Mozilla/5.0 (X11; Linux x86_64)',
+            ],
         ];
+
+        // 👈 关键：统一事实源，ledger 先占坑
+        UrlLedger::create([
+            'task_id' => $taskId,
+            'host' => $host,
+            'url' => $url,
+            'discovered_at' => now(),
+            'scheduled_at' => now(),
+        ]);
 
         $context = new PageContext(
             taskId: $taskId,
             host: $host,
             params: $params,
-            url: 'https://example.com',
+            url: $url,
             fromUrl: null,
             rawPageId: null,
         );
 
-        // 同步执行 Fetch
-        $job = new FetchPageJob($context);
-        $job->handle();
+        // Act：同步执行 FetchJob
+        (new FetchPageJob($context))->handle();
 
-        // RawPage 一定存在（事实）
+        /*
+         |------------------------------------------------------------
+         | Assert：Fetch 阶段事实
+         |------------------------------------------------------------
+         */
+
+        // ① RawPage 已写入（唯一事实源）
         $this->assertDatabaseHas('content_collector_raw_pages', [
-            'task_id' => $taskId,
-            'host'    => $host,
-            'url'     => 'https://example.com',
+            'host' => $host,
+            'url' => $url,
+            'http_code' => 200,
         ]);
 
-        // UrlLedger 一定存在
-        $this->assertDatabaseHas('content_collector_url_ledger', [
-            'task_id' => $taskId,
-            'host'    => $host,
-            'url'     => 'https://example.com',
-        ]);
+        // ② Ledger 已标记 fetched
+        $ledger = UrlLedger::where('task_id', $taskId)
+            ->where('url', $url)
+            ->first();
 
-        // fetched_at 是事实
-        $this->assertNotNull(
-            UrlLedger::where('task_id', $taskId)
-                ->where('url', 'https://example.com')
-                ->value('fetched_at'),
-        );
+        $this->assertNotNull($ledger->fetched_at);
 
-        // ParseJob 被派发即可
+        // ③ ParseJob 被派发（pipeline 连通性）
         Queue::assertPushed(ParsePageJob::class);
-
     }
 }
