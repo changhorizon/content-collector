@@ -8,7 +8,7 @@ use ChangHorizon\ContentCollector\DTO\TaskResult;
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 
-class TaskCompleted
+class TaskFinished
 {
     use Dispatchable;
     use SerializesModels;

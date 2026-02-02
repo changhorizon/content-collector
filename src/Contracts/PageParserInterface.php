@@ -8,5 +8,5 @@ use ChangHorizon\ContentCollector\DTO\ParseResult;
 
 interface PageParserInterface
 {
-    public function parse(string $html, string $baseUrl): ParseResult;
+    public function parse(string $html): ParseResult;
 }

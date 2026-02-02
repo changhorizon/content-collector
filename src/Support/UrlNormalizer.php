@@ -6,30 +6,67 @@ namespace ChangHorizon\ContentCollector\Support;
 
 final class UrlNormalizer
 {
-    /**
-     * 系统唯一 URL 规范化标准
-     */
-    public static function normalize(string $url): string
+    public static function normalize(string $raw, string $baseUrl): ?string
     {
-        $parts = parse_url(trim($url));
+        $raw = trim($raw);
 
-        if (!$parts || empty($parts['host'])) {
-            return strtolower($url);
+        if ($raw === '' || $raw === '#') {
+            return null;
         }
 
-        $scheme = strtolower($parts['scheme'] ?? 'http');
-        $host   = strtolower($parts['host']);
-        $port   = isset($parts['port']) ? ':' . $parts['port'] : '';
+        if (preg_match('#^(javascript|mailto|tel):#i', $raw)) {
+            return null;
+        }
 
-        $path = '/' . ltrim($parts['path'] ?? '/', '/');
+        try {
+            $uri = \GuzzleHttp\Psr7\UriResolver::resolve(
+                new \GuzzleHttp\Psr7\Uri($baseUrl),
+                new \GuzzleHttp\Psr7\Uri($raw),
+            );
+        } catch (\Throwable) {
+            return null;
+        }
 
+        if (! in_array($uri->getScheme(), ['http', 'https'], true)) {
+            return null;
+        }
+
+        $host = strtolower($uri->getHost());
+        if ($host === '') {
+            return null;
+        }
+
+        // 默认端口去重
+        $port = $uri->getPort();
+        if (
+            ($uri->getScheme() === 'http' && $port === 80) ||
+            ($uri->getScheme() === 'https' && $port === 443)
+        ) {
+            $port = null;
+        }
+
+        // path normalize + 连续重复段消除
+        $segments = explode('/', trim($uri->getPath(), '/'));
+        $clean = [];
+        foreach ($segments as $seg) {
+            if ($seg !== '' && end($clean) !== $seg) {
+                $clean[] = $seg;
+            }
+        }
+        $path = $clean ? '/' . implode('/', $clean) : '';
+
+        // query 排序
         $query = '';
-        if (!empty($parts['query'])) {
-            parse_str($parts['query'], $queryParams);
-            ksort($queryParams);
-            $query = $queryParams ? '?' . http_build_query($queryParams) : '';
+        parse_str($uri->getQuery(), $params);
+        if ($params) {
+            ksort($params);
+            $query = '?' . http_build_query($params);
         }
 
-        return $scheme . '://' . $host . $port . $path . $query;
+        return $uri->getScheme()
+            . '://' . $host
+            . ($port ? ':' . $port : '')
+            . $path
+            . $query;
     }
 }

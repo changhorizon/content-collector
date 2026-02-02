@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace ChangHorizon\ContentCollector;
 
-use ChangHorizon\ContentCollector\Commands\RunCollector;
+use ChangHorizon\ContentCollector\Commands\Collector;
 use ChangHorizon\ContentCollector\Contracts\PageFetcherInterface;
 use ChangHorizon\ContentCollector\Services\HttpPageFetcher;
 use Illuminate\Support\ServiceProvider;
@@ -25,7 +25,7 @@ class ContentCollectorServiceProvider extends ServiceProvider
 
         if ($this->app->runningInConsole()) {
             $this->commands([
-                RunCollector::class,
+                Collector::class,
             ]);
         }
     }
