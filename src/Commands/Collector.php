@@ -25,13 +25,20 @@ class RunCollector extends Command
 
         // 构建配置参数
         $params = (new ConfigParamsBuilder($host, $config))->build();
+
+        // 处理 params['site']['entry'] 为空的情况
         if (!isset($params['site']['entry'])) {
             throw new InvalidArgumentException("Host [$host] missing site.entry config");
         }
 
         // 创建 Crawler 实例并运行
-        (new Crawler($host, $params))->run();
+        $crawler = new Crawler($host, $params);
 
-        $this->info("ContentCollector started for host: {$host}");
+        try {
+            $crawler->run();
+            $this->info("ContentCollector started for host: {$host}");
+        } catch (\Exception $e) {
+            $this->error('Error running content collector: ' . $e->getMessage());
+        }
     }
 }
