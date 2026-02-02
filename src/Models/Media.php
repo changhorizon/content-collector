@@ -9,7 +9,6 @@ use Illuminate\Support\Carbon;
 
 /**
  * @property int $id
- * @property string $task_id
  * @property string $host
  * @property string $url
  * @property int|null $http_code
@@ -18,13 +17,13 @@ use Illuminate\Support\Carbon;
  * @property string|null $content_hash
  * @property string|null $storage_path
  * @property Carbon|null $downloaded_at
+ * @property string|null $last_task_id
  */
 class Media extends Model
 {
     protected $table = 'content_collector_media';
 
     protected $fillable = [
-        'task_id',
         'host',
         'url',
         'http_code',
@@ -33,6 +32,7 @@ class Media extends Model
         'content_hash',
         'storage_path',
         'downloaded_at',
+        'last_task_id',
     ];
 
     protected $casts = [

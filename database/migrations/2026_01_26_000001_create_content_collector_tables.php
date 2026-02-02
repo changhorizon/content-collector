@@ -34,6 +34,29 @@ return new class () extends Migration {
 
         /*
         |--------------------------------------------------------------------------
+        | 解析页面表（Parsed Pages）
+        |--------------------------------------------------------------------------
+        |
+        | 用于存储从原始页面解析得到的结构化内容，例如标题、正文、Meta 信息等。
+        |
+        */
+        Schema::create('content_collector_parsed_pages', function (Blueprint $table) {
+            $table->id();
+            $table->string('host')->comment('页面所属主机');
+            $table->string('url')->index()->comment('页面 URL');
+            $table->string('html_title')->nullable()->comment('解析得到的页面标题');
+            $table->longText('html_body')->nullable()->comment('解析得到的正文内容');
+            $table->json('html_meta')->nullable()->comment('解析得到的 Meta 信息');
+            $table->timestamp('parsed_at')->nullable()->comment('页面完成解析的时间');
+            $table->unsignedBigInteger('raw_page_id')->nullable()->comment('来源原始页面 ID');
+            $table->string('last_task_id')->nullable()->index()->comment('最近一次生成/更新该页面的采集任务 ID');
+            $table->timestamps();
+            $table->unique(['host', 'url']);
+            $table->comment('从原始页面解析得到的结构化内容');
+        });
+
+        /*
+        |--------------------------------------------------------------------------
         | 媒体资源表（Media）
         |--------------------------------------------------------------------------
         |
@@ -42,7 +65,6 @@ return new class () extends Migration {
         */
         Schema::create('content_collector_media', function (Blueprint $table) {
             $table->id();
-            $table->string('task_id')->index()->comment('所属采集任务标识');
             $table->string('host')->comment('媒体资源所属主机');
             $table->string('url')->comment('媒体资源 URL');
             $table->smallInteger('http_code')->nullable()->comment('媒体请求返回状态码');
@@ -51,8 +73,9 @@ return new class () extends Migration {
             $table->string('content_hash')->nullable()->comment('媒体内容哈希');
             $table->string('storage_path')->nullable()->comment('媒体存储路径');
             $table->timestamp('downloaded_at')->nullable()->comment('媒体下载完成时间');
+            $table->string('last_task_id')->nullable()->index()->comment('最近一次下载/更新该媒体的采集任务 ID');
             $table->timestamps();
-            $table->unique(['task_id', 'host', 'url']);
+            $table->unique(['host', 'url']);
             $table->comment('页面引用的外部媒体资源');
         });
 
@@ -81,28 +104,6 @@ return new class () extends Migration {
                 'cc_ref_raw_target_tag_unique',
             );
             $table->comment('页面与页面 / 媒体之间的引用关系');
-        });
-
-        /*
-        |--------------------------------------------------------------------------
-        | 解析页面表（Parsed Pages）
-        |--------------------------------------------------------------------------
-        |
-        | 用于存储从原始页面解析得到的结构化内容，例如标题、正文、Meta 信息等。
-        |
-        */
-        Schema::create('content_collector_parsed_pages', function (Blueprint $table) {
-            $table->id();
-            $table->unsignedBigInteger('raw_page_id')->comment('来源原始页面 ID');
-            $table->string('host')->comment('页面所属主机');
-            $table->string('url')->index()->comment('页面 URL');
-            $table->string('html_title')->nullable()->comment('解析得到的页面标题');
-            $table->longText('html_body')->nullable()->comment('解析得到的正文内容');
-            $table->json('html_meta')->nullable()->comment('解析得到的 Meta 信息');
-            $table->timestamp('parsed_at')->nullable()->comment('页面完成解析的时间');
-            $table->timestamps();
-            $table->unique(['host', 'url']);
-            $table->comment('从原始页面解析得到的结构化内容');
         });
 
         /*
@@ -182,9 +183,9 @@ return new class () extends Migration {
         Schema::dropIfExists('content_collector_task_locks');
         Schema::dropIfExists('content_collector_tasks');
         Schema::dropIfExists('content_collector_url_ledger');
-        Schema::dropIfExists('content_collector_parsed_pages');
         Schema::dropIfExists('content_collector_references');
         Schema::dropIfExists('content_collector_media');
+        Schema::dropIfExists('content_collector_parsed_pages');
         Schema::dropIfExists('content_collector_raw_pages');
     }
 };

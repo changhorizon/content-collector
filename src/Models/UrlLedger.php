@@ -42,11 +42,27 @@ class UrlLedger extends Model
         'scheduled_at' => 'datetime',
         'fetched_at' => 'datetime',
         'parsed_at' => 'datetime',
-        'final_result'  => UrlLedgerResult::class,
+        'final_result' => UrlLedgerResult::class,
     ];
 
     public function task(): BelongsTo
     {
         return $this->belongsTo(Task::class, 'task_id', 'task_id');
+    }
+
+    public static function acquireFetchLock(
+        string $taskId,
+        string $host,
+        string $url,
+    ): bool {
+        return self::where('task_id', $taskId)
+                ->where('host', $host)
+                ->where('url', $url)
+                ->whereNull('fetched_at')      // 👈 关键：只允许“没 fetch 过的”
+                ->update(
+                    [
+                        'fetched_at' => now(),  // 👈 抢锁即占位
+                    ],
+                ) === 1;
     }
 }
