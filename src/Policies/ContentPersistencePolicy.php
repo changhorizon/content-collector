@@ -6,73 +6,84 @@ namespace ChangHorizon\ContentCollector\Policies;
 
 use ChangHorizon\ContentCollector\Models\RawPage;
 use ChangHorizon\ContentCollector\Support\PathMatcher;
-use ChangHorizon\ContentCollector\Support\UrlNormalizer;
 
-class ContentPersistencePolicy
+final class ContentPersistencePolicy
 {
     /**
-     * 是否允许持久化该 URL 的内容
+     * ⚠️ 本 Policy 仅决定「是否持久化内容」
+     * ⚠️ 不得用于控制 URL 是否 discover / schedule
      */
-    public function shouldPersist(
+    public function decide(
         string $taskId,
         string $host,
         array $params,
         string $url,
-    ): bool {
-        $normalized = UrlNormalizer::normalize($url);
-        $full = (bool) ($params['site']['full'] ?? false);
-
+    ): PersistenceDecision {
         /**
-         * ① task 内唯一（永远成立）
+         * ① task 内唯一（绝对规则）
          */
-        if (RawPage::where('task_id', $taskId)
-            ->where('host', $host)
-            ->where('url', $normalized)
-            ->exists()) {
-            return false;
+        if (
+            RawPage::where('task_id', $taskId)
+                ->where('host', $host)
+                ->where('url', $url)
+                ->exists()
+        ) {
+            return PersistenceDecision::skip('duplicate_in_task');
         }
 
         /**
-         * ② 增量模式：历史已存在则跳过
+         * ② 读取并清洗规则（防 explode('') 陷阱）
          */
-        if (! $full) {
-            if (RawPage::where('host', $host)
-                ->where('url', $normalized)
-                ->exists()) {
-                return false;
-            }
-        }
+        $site = $params['site'] ?? [];
 
-        /**
-         * ③ 内容路径规则
-         */
-        $priority = $params['site']['priority'] ?? 'black';
-        $allow = $params['site']['allow'] ?? [];
-        $deny = $params['site']['deny'] ?? [];
+        $priority = $site['priority'] ?? 'black';
+        $allow = $this->sanitizeRules($site['allow'] ?? []);
+        $deny  = $this->sanitizeRules($site['deny'] ?? []);
 
-        $path = parse_url($normalized, PHP_URL_PATH) ?? '/';
-        $path = strtolower('/' . ltrim(rawurldecode($path), '/'));
-
-        if (! in_array($priority, ['black', 'white'], true)) {
+        if (!in_array($priority, ['black', 'white'], true)) {
             $priority = 'black';
         }
 
+        /**
+         * ③ 计算 path
+         */
+        $path = parse_url($url, PHP_URL_PATH) ?? '/';
+        $path = strtolower('/' . ltrim(rawurldecode($path), '/'));
+
+        /**
+         * ④ 策略裁决（只影响 persist）
+         */
         if ($priority === 'black') {
             if ($deny && PathMatcher::matches($path, $deny)) {
-                return false;
+                return PersistenceDecision::deny('path_denied');
             }
-            if ($allow && ! PathMatcher::matches($path, $allow)) {
-                return false;
+
+            if ($allow && !PathMatcher::matches($path, $allow)) {
+                return PersistenceDecision::skip('path_not_allowed');
             }
         } else {
-            if ($allow && ! PathMatcher::matches($path, $allow)) {
-                return false;
+            if ($allow && !PathMatcher::matches($path, $allow)) {
+                return PersistenceDecision::skip('path_not_allowed');
             }
+
             if ($deny && PathMatcher::matches($path, $deny)) {
-                return false;
+                return PersistenceDecision::deny('path_denied');
             }
         }
 
-        return true;
+        return PersistenceDecision::allow();
+    }
+
+    /**
+     * 规则清洗：
+     * - 移除空字符串
+     * - 保证 [] 表示「未配置规则」
+     */
+    private function sanitizeRules(array $rules): array
+    {
+        return array_values(array_filter(
+            $rules,
+            static fn ($v) => is_string($v) && $v !== '',
+        ));
     }
 }
