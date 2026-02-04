@@ -5,8 +5,15 @@ declare(strict_types=1);
 namespace ChangHorizon\ContentCollector;
 
 use ChangHorizon\ContentCollector\Commands\Collector;
+use ChangHorizon\ContentCollector\Contracts\HttpTransportInterface;
+use ChangHorizon\ContentCollector\Contracts\MediaDownloaderInterface;
 use ChangHorizon\ContentCollector\Contracts\PageFetcherInterface;
-use ChangHorizon\ContentCollector\Services\HttpPageFetcher;
+use ChangHorizon\ContentCollector\Contracts\PageParserInterface;
+use ChangHorizon\ContentCollector\Services\AdvancedHtmlParser;
+use ChangHorizon\ContentCollector\Services\MediaDownloader;
+use ChangHorizon\ContentCollector\Services\PageFetcher;
+use ChangHorizon\ContentCollector\Support\HttpTransport;
+use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Support\ServiceProvider;
 
 class ContentCollectorServiceProvider extends ServiceProvider
@@ -39,9 +46,25 @@ class ContentCollectorServiceProvider extends ServiceProvider
         );
 
         // ✅ 绑定接口到默认实现
-        $this->app->bind(
-            PageFetcherInterface::class,
-            HttpPageFetcher::class,
-        );
+        $this->app->bind(PageParserInterface::class, function () {
+            return new AdvancedHtmlParser();
+        });
+
+        $this->app->bind(HttpTransportInterface::class, function () {
+            return new HttpTransport();
+        });
+
+        $this->app->bind(PageFetcherInterface::class, function ($app) {
+            return new PageFetcher(
+                transport: $app->make(HttpTransportInterface::class),
+            );
+        });
+
+        $this->app->bind(MediaDownloaderInterface::class, function ($app) {
+            return new MediaDownloader(
+                transport: $app->make(HttpTransportInterface::class),
+                storage: $app->get(Filesystem::class),
+            );
+        });
     }
 }

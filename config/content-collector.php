@@ -24,13 +24,13 @@ if (!is_array($userAgents) || $userAgents === []) {
 }
 
 $defaultAllow = [];
-$defaultDeny  = [];
+$defaultDeny = [];
 
 $envAllow = env('SITE_ALLOW');
-$envDeny  = env('SITE_DENY');
+$envDeny = env('SITE_DENY');
 
 $allow = is_string($envAllow) ? json_decode($envAllow, true) : null;
-$deny  = is_string($envDeny) ? json_decode($envDeny, true) : null;
+$deny = is_string($envDeny) ? json_decode($envDeny, true) : null;
 
 // ❗兜底：json 无效 / 非数组 / 空数组
 if (!is_array($allow) || $allow === []) {
@@ -48,23 +48,31 @@ return [
         'max_concurrent_per_host' => env('REDIS_MAX_CONCURRENT_PER_HOST', 3),
     ],
 
+    'queues' => [
+        'fetch' => env('QUEUE_NAME_FETCH', 'cc-fetch'),
+        'parse' => env('QUEUE_NAME_PARSE', 'cc-parse'),
+        'media' => env('QUEUE_NAME_MEDIA', 'cc-media'),
+    ],
+
     'confine' => [
-        'delay_ms' => env('CRAWLER_DELAY_MS', 1500),
-        'jitter_ms' => env('CRAWLER_JITTER_MS', 500),
         'max_urls' => env('CRAWLER_MAX_URLS', 10000),
+        'jitter_ms' => env('CRAWLER_JITTER_MS', 500),
+        'delay_ms' => env('CRAWLER_DELAY_MS', 1500),
     ],
 
     'client' => [
-        'http_timeout' => env('HTTP_TIMEOUT', 15),
+        'timeout' => env('CLIENT_TIMEOUT', 15),
         // ✅ 对外保证：永远是 string[]
         'user_agents' => array_values($userAgents),
     ],
 
-    'queues' => [
-        'default' => env('QUEUE_NAME_DEFAULT', 'cc-default'),
-        'crawl' => env('QUEUE_NAME_CRAWL', 'cc-crawl'),
-        'parse' => env('QUEUE_NAME_PARSE', 'cc-parse'),
-        'media' => env('QUEUE_NAME_MEDIA', 'cc-media'),
+    'proxy' => [
+        'enabled' => env('PROXY_ENABLED', false),
+        'url' => env('PROXY_URL', 'http://localhost:3000'),
+        'scopes' => [ // 作用范围
+            'html',   // 页面 fetch
+            'media',  // 媒体下载下载
+        ],
     ],
 
     'sites' => [
@@ -72,7 +80,7 @@ return [
             'entry' => env('SITE_ENTRY', 'https://example.com'),
             'priority' => env('SITE_PRIORITY', 'black'),
             'allow' => array_values($allow),
-            'deny'  => array_values($deny),
+            'deny' => array_values($deny),
         ],
     ],
 ];
