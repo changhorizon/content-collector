@@ -4,14 +4,14 @@ declare(strict_types=1);
 
 namespace ChangHorizon\ContentCollector\DTO;
 
-final class FetchRequest
+final readonly class FetchRequest
 {
     public function __construct(
-        public readonly array $headers = [],
-        public readonly ?int $timeout = null,
-        public readonly ?string $proxy = null,
-        public readonly bool $allowRedirects = true,
-        public readonly int $maxRedirects = 5,
+        public array $headers = [],
+        public ?int $timeout = null,
+        public ?string $proxy = null,
+        public bool $allowRedirects = true,
+        public int $maxRedirects = 5,
     ) {
     }
 
