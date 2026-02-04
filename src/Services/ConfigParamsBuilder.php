@@ -7,33 +7,37 @@ namespace ChangHorizon\ContentCollector\Services;
 use InvalidArgumentException;
 
 /**
- * @phpstan-type RedisConfig array{
+ * @phpstan-type RedisParams array{
  *   enabled: bool,
  *   host_key_prefix: string,
  *   task_count_prefix: string,
  *   max_concurrent_per_host: int
  * }
  *
- * @phpstan-type ConfineConfig array{
+ * @phpstan-type QueuesParams array{
+ *    default: string,
+ *    crawl: string,
+ *    parse: string,
+ *    media: string
+ *  }
+ *
+ * @phpstan-type ConfineParams array{
  *   delay_ms: int,
  *   jitter_ms: int,
  *   max_urls: int
  * }
  *
- * @phpstan-type ClientConfig array{
- *   http_timeout: int,
- *   user_agents: list<string>,
- *   user_agent: string
+ * @phpstan-type ClientParams array{
+ *   timeout: int,
+ *   headers: array{User-Agent: string}
  * }
  *
- * @phpstan-type QueuesConfig array{
- *  default: string,
- *   crawl: string,
- *   parse: string,
- *   media: string
+ * @phpstan-type ProxyParams array{
+ *   url: string|null,
+ *   scopes: list<'html'|'media'>
  * }
  *
- * @phpstan-type SiteConfig array{
+ * @phpstan-type SiteParams array{
  *   entry: string,
  *   priority: string,
  *   allow: list<string>,
@@ -41,11 +45,12 @@ use InvalidArgumentException;
  * }
  *
  * @phpstan-type CrawlParams array{
- *   redis: RedisConfig,
- *   confine: ConfineConfig,
- *   client: ClientConfig,
- *   queues: QueuesConfig,
- *   site: SiteConfig,
+ *   redis: RedisParams,
+ *   queues: QueuesParams,
+ *   confine: ConfineParams,
+ *   client: ClientParams,
+ *   proxy: ProxyParams,
+ *   site: SiteParams
  * }
  */
 class ConfigParamsBuilder
@@ -60,20 +65,25 @@ class ConfigParamsBuilder
             'task_count_prefix' => 'crawler:task:',
             'max_concurrent_per_host' => 3,
         ],
+        'queues' => [
+            'default' => 'cc-default',
+            'crawl' => 'cc-crawl',
+            'parse' => 'cc-parse',
+            'media' => 'cc-media',
+        ],
         'confine' => [
             'delay_ms' => 1500,
             'jitter_ms' => 500,
             'max_urls' => 10000,
         ],
         'client' => [
-            'http_timeout' => 15,
+            'timeout' => 15,
             'user_agents' => ['Mozilla/5.0'],
         ],
-        'queues' => [
-            'default' => 'cc-default',
-            'crawl' => 'cc-crawl',
-            'parse' => 'cc-parse',
-            'media' => 'cc-media',
+        'proxy' => [
+            'enabled' => false,
+            'url' => 'http://192.168.56.10:3000',
+            'scopes' => ['html'],
         ],
         'site' => [
             'entry' => '',
@@ -116,9 +126,10 @@ class ConfigParamsBuilder
             $merged[$key] = array_merge($default, $user);
         }
 
-        $this->validateClient($merged['client']);
+        $this->validateQueues($merged['queues']);
         $this->validateConfine($merged['confine']);
-        $this->validateQueues($merged['queues']); // ✅ 新增
+        $this->validateClient($merged['client']);
+        $this->validateProxy($merged['proxy']);
         $this->validateSite($merged['site']);
 
         $merged['client']['user_agents'] = array_values(array_filter(
@@ -130,11 +141,56 @@ class ConfigParamsBuilder
             throw new InvalidArgumentException('Client [user_agents] resolved to empty after normalization.');
         }
 
-        // 生成 user_agent
-        $uaList = array_values($merged['client']['user_agents']);
-        $merged['client']['user_agent'] = $uaList[array_rand($uaList)];
+        $merged['client'] = $this->buildClient($merged['client']);
+        $merged['proxy'] = $this->buildProxy($merged['proxy']);
 
         return $merged;
+    }
+
+    protected function buildClient(array $client): array
+    {
+        $uaList = array_values($client['user_agents']);
+        $userAgent = $uaList[array_rand($uaList)];
+
+        // user_agents 是配置期语义，在此处被“编译掉”
+        return [
+            'timeout' => $client['timeout'],
+            'headers' => ['User-Agent' => $userAgent],
+        ];
+    }
+
+    protected function buildProxy(array $proxy): array
+    {
+        if (!$proxy['enabled']) {
+            return [
+                'url' => null,
+                'scopes' => [],
+            ];
+        }
+
+        $scopes = array_values(array_filter(
+            $proxy['scopes'] ?? ['html'],
+            static fn ($s) => in_array($s, ['html', 'media'], true),
+        ));
+
+        // enabled 是配置期语义，在此处被“编译掉”
+        return [
+            'url' => $proxy['url'],
+            'scopes' => $scopes,
+        ];
+    }
+
+    protected function validateQueues(array $queues): void
+    {
+        foreach (['default', 'crawl', 'parse', 'media'] as $key) {
+            if (
+                !isset($queues[$key]) ||
+                !is_string($queues[$key]) ||
+                trim($queues[$key]) === ''
+            ) {
+                throw new InvalidArgumentException("Queues [$key] must be non-empty string.");
+            }
+        }
     }
 
     protected function validateConfine(array $confine): void
@@ -148,8 +204,8 @@ class ConfigParamsBuilder
 
     protected function validateClient(array $client): void
     {
-        if (!is_int($client['http_timeout']) || $client['http_timeout'] <= 0) {
-            throw new InvalidArgumentException('Client [http_timeout] must be positive integer.');
+        if (!is_int($client['timeout']) || $client['timeout'] <= 0) {
+            throw new InvalidArgumentException('Client [timeout] must be positive integer.');
         }
 
         if (!is_array($client['user_agents']) || count($client['user_agents']) === 0) {
@@ -163,15 +219,19 @@ class ConfigParamsBuilder
         }
     }
 
-    protected function validateQueues(array $queues): void
+    protected function validateProxy(array $proxy): void
     {
-        foreach (['default', 'crawl', 'parse', 'media'] as $key) {
-            if (
-                !isset($queues[$key]) ||
-                !is_string($queues[$key]) ||
-                trim($queues[$key]) === ''
-            ) {
-                throw new InvalidArgumentException("Queues [$key] must be non-empty string.");
+        if (!is_bool($proxy['enabled'])) {
+            throw new InvalidArgumentException('Proxy [enabled] must be boolean.');
+        }
+
+        if ($proxy['enabled']) {
+            if (!is_string($proxy['url']) || trim($proxy['url']) === '') {
+                throw new InvalidArgumentException('Proxy [url] must be non-empty string.');
+            }
+
+            if (!filter_var($proxy['url'], FILTER_VALIDATE_URL)) {
+                throw new InvalidArgumentException('Proxy [url] must be valid URL.');
             }
         }
     }

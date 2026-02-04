@@ -56,7 +56,7 @@ class Crawler
                 fromUrl: null,
                 rawPageId: null,
             ),
-        )->onQueue($this->params['queues']['crawl']);
+        )->onQueue($this->params['queues']['fetch']);
 
         Log::info("Crawler task [$taskId] started for host: {$this->host}");
     }
