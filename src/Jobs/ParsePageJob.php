@@ -20,7 +20,7 @@ use ChangHorizon\ContentCollector\Policies\ContentPersistencePolicy;
 use ChangHorizon\ContentCollector\Schedulers\MediaDownloadScheduler;
 use ChangHorizon\ContentCollector\Schedulers\PageJobScheduler;
 use ChangHorizon\ContentCollector\Services\LinkExtractor;
-use ChangHorizon\ContentCollector\Services\SimpleHtmlParser;
+use ChangHorizon\ContentCollector\Services\MediaNormalizer;
 use ChangHorizon\ContentCollector\Services\TaskFinalizer;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -42,11 +42,13 @@ class ParsePageJob implements ShouldQueue
         protected ?PageParserInterface $parser = null,
         protected ?ContentPersistencePolicy $policy = null,
         protected ?LinkExtractor $linkExtractor = null,
+        protected ?MediaNormalizer $mediaNormalizer = null,
         protected ?TaskFinalizer $finalizer = null,
     ) {
-        $this->parser = $parser ?? new SimpleHtmlParser();
+        $this->parser = app(PageParserInterface::class);
         $this->policy = $policy ?? new ContentPersistencePolicy();
         $this->linkExtractor = $linkExtractor ?? new LinkExtractor($context->host);
+        $this->mediaNormalizer = $mediaNormalizer ?? new MediaNormalizer();
         $this->finalizer = $this->finalizer ?? new TaskFinalizer();
     }
 
@@ -82,32 +84,35 @@ class ParsePageJob implements ShouldQueue
             $this->markParsed();
 
             $parsedPage = DB::transaction(function () use ($result, $raw) {
-                if (!$this->policy->decide(
-                    $this->context->taskId,
-                    $this->context->host,
+                // 获取持久化决策
+                $decision = $this->policy->decide(
                     $this->context->params,
                     $this->context->url,
-                )) {
+                );
+
+                // ③ 只影响持久化，不影响后续抓取
+                if (!$decision->shouldPersist) {
                     $this->markFinal(
-                        UrlLedgerResult::SKIPPED,
-                        'policy_skipped',
+                        $decision->finalResult,
+                        $decision->reason,
                     );
 
                     return null;
-                } else {
-                    $parsedPage = $this->persistParsedPage($result, $raw);
-                    $this->persistReferences($result, $raw);
-                    $this->markFinal(
-                        UrlLedgerResult::SUCCESS,
-                        'parsed',
-                    );
-
-                    return $parsedPage;
                 }
+
+                // ④ 执行页面持久化
+                $parsedPage = $this->persistParsedPage($result, $raw);
+                $this->persistReferences($result, $raw);
+                $this->markFinal(
+                    UrlLedgerResult::SUCCESS,
+                    'parsed',
+                );
+
+                return $parsedPage;
             });
 
             if ($parsedPage) {
-                $mediaUrls = $this->linkExtractor->extract($result->mediaUrls, $this->context->url);
+                $mediaUrls = $this->mediaNormalizer->normalize($result->mediaUrls, $this->context->url);
                 if (!empty($mediaUrls)) {
                     $context = new MediaContext(
                         taskId: $this->context->taskId,
@@ -135,7 +140,7 @@ class ParsePageJob implements ShouldQueue
         // ✅ guarded + transaction 完全结束之后，再 dispatch
         foreach ($nextContexts as $ctx) {
             FetchPageJob::dispatch($ctx)
-                ->onQueue($this->context->params['queues']['crawl']);
+                ->onQueue($this->context->params['queues']['fetch']);
         }
 
         $this->finalizer->tryFinish($this->context->taskId);
@@ -154,11 +159,11 @@ class ParsePageJob implements ShouldQueue
     {
         return ParsedPage::updateOrCreate(
             [
-                'raw_page_id' => $raw->id,
-            ],
-            [
                 'host' => $this->context->host,
                 'url' => $this->context->url,
+            ],
+            [
+                'raw_page_id' => $raw->id,
                 'html_title' => $result->title,
                 'html_body' => $result->bodyHtml,
                 'html_meta' => $result->meta,
@@ -215,5 +220,4 @@ class ParsePageJob implements ShouldQueue
                 'final_reason' => $reason,
             ]);
     }
-
 }

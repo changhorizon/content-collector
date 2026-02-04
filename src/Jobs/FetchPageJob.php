@@ -13,7 +13,6 @@ use ChangHorizon\ContentCollector\Jobs\Concerns\JobRuntimeGuard;
 use ChangHorizon\ContentCollector\Models\RawPage;
 use ChangHorizon\ContentCollector\Models\UrlLedger;
 use ChangHorizon\ContentCollector\Policies\UrlCrawlPolicy;
-use ChangHorizon\ContentCollector\Services\HttpPageFetcher;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -34,7 +33,7 @@ class FetchPageJob implements ShouldQueue
     public function __construct(
         protected PageContext $context,
     ) {
-        $this->fetcher = new HttpPageFetcher();
+        $this->fetcher = app(PageFetcherInterface::class);
     }
 
     public function handle(): void
@@ -71,19 +70,12 @@ class FetchPageJob implements ShouldQueue
                 return null;
             }
 
-            $userAgent =
-                $this->context->params['client']['user_agent']
-                ?? config('content-collector.client.user_agent')
-                ?? 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-
-            $timeout = $this->context->params['client']['http_timeout']
-                ?? config('content-collector.client.http_timeout', 10);
-
             $fetchRequest = new FetchRequest(
-                headers: [
-                    'User-Agent' => $userAgent,
-                ],
-                timeout: $timeout,
+                headers: $this->context->params['client']['headers'] ?? [],
+                timeout: $this->context->params['client']['timeout'] ?? null,
+                proxy: in_array('html', $this->context->params['proxy']['scopes'], true)
+                    ? $this->context->params['proxy']['url']
+                    : null,
             );
 
             $result = $this->fetcher->fetch(
@@ -101,9 +93,7 @@ class FetchPageJob implements ShouldQueue
                 return null;
             }
 
-            $contentType = $result->headers['content-type'][0] ?? '';
-
-            if (!str_starts_with($contentType, 'text/html')) {
+            if (!$result->isHtml()) {
                 UrlLedger::where('task_id', $this->context->taskId)
                     ->where('host', $this->context->host)
                     ->where('url', $this->context->url)
@@ -143,20 +133,6 @@ class FetchPageJob implements ShouldQueue
             ParsePageJob::dispatch($parseContext)
                 ->onQueue($this->context->params['queues']['parse']);
         }
-    }
-
-    protected function isFinalized(): bool
-    {
-        // 入口 URL 永远允许 fetch → parse
-        if ($this->context->fromUrl === null) {
-            return false;
-        }
-
-        return UrlLedger::where('task_id', $this->context->taskId)
-            ->where('host', $this->context->host)
-            ->where('url', $this->context->url)
-            ->whereNotNull('final_result')
-            ->exists();
     }
 
     protected function markScheduled(): void
