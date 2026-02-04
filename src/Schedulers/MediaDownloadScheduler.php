@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace ChangHorizon\ContentCollector\Schedulers;
 
 use ChangHorizon\ContentCollector\DTO\MediaContext;
-use ChangHorizon\ContentCollector\Jobs\DownloadMediaJob;
+use ChangHorizon\ContentCollector\Jobs\StoreMediaJob;
 
 class MediaDownloadScheduler
 {
@@ -18,7 +18,7 @@ class MediaDownloadScheduler
     public static function schedule(MediaContext $context, array $mediaUrls): void
     {
         foreach ($mediaUrls as $mediaUrl) {
-            DownloadMediaJob::dispatch($context, $mediaUrl)
+            StoreMediaJob::dispatch($context, $mediaUrl)
                 ->onQueue($context->params['queues']['media']);
         }
     }

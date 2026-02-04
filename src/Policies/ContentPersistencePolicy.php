@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace ChangHorizon\ContentCollector\Policies;
 
-use ChangHorizon\ContentCollector\Models\RawPage;
 use ChangHorizon\ContentCollector\Support\PathMatcher;
+use Illuminate\Support\Facades\Log;
 
 final class ContentPersistencePolicy
 {
@@ -14,44 +14,33 @@ final class ContentPersistencePolicy
      * ⚠️ 不得用于控制 URL 是否 discover / schedule
      */
     public function decide(
-        string $taskId,
-        string $host,
         array $params,
         string $url,
     ): PersistenceDecision {
         /**
-         * ① task 内唯一（绝对规则）
-         */
-        if (
-            RawPage::where('task_id', $taskId)
-                ->where('host', $host)
-                ->where('url', $url)
-                ->exists()
-        ) {
-            return PersistenceDecision::skip('duplicate_in_task');
-        }
-
-        /**
-         * ② 读取并清洗规则（防 explode('') 陷阱）
+         * ① 读取并清洗规则（防 explode('') 陷阱）
          */
         $site = $params['site'] ?? [];
 
-        $priority = $site['priority'] ?? 'black';
+        $priority = $site['rule_priority'] ?? 'black';
         $allow = $this->sanitizeRules($site['allow'] ?? []);
-        $deny  = $this->sanitizeRules($site['deny'] ?? []);
+        $deny = $this->sanitizeRules($site['deny'] ?? []);
 
         if (!in_array($priority, ['black', 'white'], true)) {
             $priority = 'black';
         }
 
         /**
-         * ③ 计算 path
+         * ② 计算 path
          */
-        $path = parse_url($url, PHP_URL_PATH) ?? '/';
-        $path = strtolower('/' . ltrim(rawurldecode($path), '/'));
+        $path = parse_url($url, PHP_URL_PATH);
+        $path = $path ? strtolower('/' . ltrim(rawurldecode($path), '/')) : '/';
 
+        Log::info("Evaluating path: $path");
+        Log::info('Allow rules: ' . implode(', ', $allow));
+        Log::info('Deny rules: ' . implode(', ', $deny));
         /**
-         * ④ 策略裁决（只影响 persist）
+         * ③ 策略裁决（只影响 persist）
          */
         if ($priority === 'black') {
             if ($deny && PathMatcher::matches($path, $deny)) {
